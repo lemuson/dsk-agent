@@ -1,0 +1,143 @@
+x-backend-environment: &backend-environment
+  DB_HOST: database
+  DB_PORT: 5432
+  DB_USER: ${DB_USER:-postgres_user}
+  DB_PASS: ${DB_PASS:-postgres_password}
+  DB_NAME: ${DB_NAME:-dsk}
+  JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me}
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  MAX_MANAGER_DISCOUNT_PERCENT: ${MAX_MANAGER_DISCOUNT_PERCENT:-5}
+  MAX_SUPERVISOR_DISCOUNT_PERCENT: ${MAX_SUPERVISOR_DISCOUNT_PERCENT:-15}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-}
+
+services:
+  database:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres_user}
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres_password}
+      POSTGRES_DB: ${DB_NAME:-dsk}
+      DB_USER: ${DB_USER:-postgres_user}
+      DB_PASS: ${DB_PASS:-postgres_password}
+      DB_NAME: ${DB_NAME:-dsk}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./backend/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${DB_USER:-postgres_user} -d $${DB_NAME:-dsk}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  user-server:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["/user_server"]
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *backend-environment
+      PORT: 8080
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/swagger/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  staff-server:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["/staff_server"]
+    ports:
+      - "8081:8081"
+    environment:
+      <<: *backend-environment
+      PORT: 8081
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/swagger/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  agent:
+    build:
+      context: ./agent
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: ${APP_NAME:-agent}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-app.topic}
+      RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-agent}
+      RABBITMQ_ROUTING_KEY: ${RABBITMQ_ROUTING_KEY:-agent.chat.request}
+      RABBITMQ_PREFETCH_COUNT: ${RABBITMQ_PREFETCH_COUNT:-10}
+      GIGACHAT_CREDENTIALS: ${GIGACHAT_CREDENTIALS:-replace-with-authorization-key}
+      GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      GIGACHAT_MODEL: ${GIGACHAT_MODEL:-GigaChat}
+      GIGACHAT_VERIFY_SSL_CERTS: ${GIGACHAT_VERIFY_SSL_CERTS:-true}
+      GIGACHAT_TIMEOUT: ${GIGACHAT_TIMEOUT:-60}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      staff-server:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      user-server:
+        condition: service_healthy
+      staff-server:
+        condition: service_healthy

@@ -1,0 +1,9 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+aio-pika==9.5.7
+pydantic==2.11.7
+pydantic-settings==2.10.1
+gigachat==0.2.3
+langgraph==1.2.11
+pytest==8.4.1
+pytest-asyncio==1.1.0
